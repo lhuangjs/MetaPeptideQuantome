@@ -1,0 +1,7 @@
+*.properties
+*.log
+# IDEA
+.idea/
+*.iml
+# mpq
+target/
