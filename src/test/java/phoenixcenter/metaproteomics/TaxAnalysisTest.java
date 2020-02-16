@@ -4,7 +4,6 @@ import org.dom4j.Document;
 import org.dom4j.DocumentException;
 import org.dom4j.Element;
 import org.dom4j.io.SAXReader;
-import org.junit.Before;
 import org.junit.Test;
 
 import java.io.BufferedWriter;
@@ -13,6 +12,7 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 public class TaxAnalysisTest {
     TaxAnalysis taxAnalysis = new TaxAnalysis();
@@ -66,9 +66,9 @@ public class TaxAnalysisTest {
                     }
                     psmCount[i] += 1;
                 }
-                if(itr.hasNext()){
+                if (itr.hasNext()) {
                     queryElement = itr.next();
-                }else{
+                } else {
                     queryElement = null;
                 }
             }
@@ -91,6 +91,16 @@ public class TaxAnalysisTest {
         String peptideFile = "/home/huangjs/Documents/mpq/lake/peptides.tsv";
         String lcaFile = "/home/huangjs/Documents/mpq/lake/lca.tsv";
         taxAnalysis.peptide2LCA(peptideFile, true, lcaFile);
+    }
+
+    @Test
+    public void runUnipept() throws IOException {
+        taxAnalysis.peptide2LCA(Files.lines(Paths.get("/home/huangjs/Documents/mpq/lake/peptides.tsv"))
+                        .skip(1)
+                        .map(line -> line.split("\t")[0])
+                        .limit(50)
+                        .collect(Collectors.toSet()),
+                true, null);
     }
 
 //    @Test

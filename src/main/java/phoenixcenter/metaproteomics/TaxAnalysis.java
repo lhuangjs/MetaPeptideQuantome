@@ -1,18 +1,36 @@
 package phoenixcenter.metaproteomics;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.DeserializationFeature;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.extern.log4j.Log4j2;
+import org.apache.http.HttpEntity;
+import org.apache.http.HttpHeaders;
+import org.apache.http.NoHttpResponseException;
+import org.apache.http.client.methods.CloseableHttpResponse;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.entity.StringEntity;
+import org.apache.http.impl.client.CloseableHttpClient;
+import org.apache.http.impl.client.HttpClients;
+import org.apache.http.util.EntityUtils;
+import org.openqa.selenium.json.Json;
+import phoenixcenter.metaproteomics.entity.UnipeptLCA;
+import phoenixcenter.metaproteomics.entity.UnipeptTaxon;
 
 import java.io.BufferedReader;
 import java.io.BufferedWriter;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
@@ -72,14 +90,14 @@ public class TaxAnalysis {
                 processShard(peptideInfoList, containQuantData, equalIL, bw);
                 bw.flush();
                 peptideInfoList.clear();
-                log.info("{} peptides have been processed", count);
-            }
-            if (count % sleepBatch == 0) {
-                try {
-                    Thread.sleep(60_000);
-                } catch (InterruptedException e) {
-                    throw new RuntimeException(e);
+                if (count % sleepBatch == 0) {
+                    try {
+                        Thread.sleep(10_000);
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
                 }
+                log.info("{} peptides have been processed", count);
             }
         }
         if (peptideInfoList.size() > 0) {
@@ -106,7 +124,19 @@ public class TaxAnalysis {
                                 Collectors.toList())
                 ));
         Map<String, String> peptide2LCA = new HashMap<>();
-        peptide2LCA(peptide2Info.keySet(), equalIL, lcaInfo -> peptide2LCA.put(lcaInfo[0], lcaInfo[1]));
+//        peptide2LCA(peptide2Info.keySet(), equalIL, lcaInfo -> peptide2LCA.put(lcaInfo[0], lcaInfo[1]));
+        peptide2LCA(peptide2Info.keySet(), equalIL, unipeptLCA -> {
+            List<String> lineageNames = unipeptLCA.getLineageNames();
+            List<Integer> lineageIds = unipeptLCA.getLineageIds();
+            peptide2LCA.put(unipeptLCA.getSequence(),
+                    String.join("\t", unipeptLCA.getLcaId().toString(),
+                            unipeptLCA.getLcaName(), unipeptLCA.getLcaRank())
+                            + "\t"
+                            + IntStream.range(0, ranks.length)
+                            .mapToObj(i -> lineageIds.get(i) + "\t" + lineageNames.get(i))
+                            .collect(Collectors.joining("\t"))
+            );
+        });
         for (Map.Entry<String, List<String>> e : peptide2Info.entrySet()) {
             String peptide = e.getKey();
             for (String peptideInfo : e.getValue()) {
@@ -150,26 +180,179 @@ public class TaxAnalysis {
 //        }
     }
 
+    private final CloseableHttpClient httpClient = HttpClients.createDefault();
+    private final Map<Integer, UnipeptTaxon> tid2Taxon = new ConcurrentHashMap<>(3000);
+
+    private final Random random = new Random();
+
+
     public void peptide2LCA(Collection<String> peptides,
                             boolean equalIL,
-                            Consumer<String[]> consumer) throws IOException {
-//        Path tempFilePath = Files.createTempFile("unipept", ".tsv");
-        String command = String.join(" ",
-                "unipept pept2lca",
-//                "--output", tempFilePath.toString(),
-                equalIL ? "--equate" : "",
-                "--all",
-                peptides.stream().collect(Collectors.joining(" "))
-        );
-        commandExecutor.exec(command, (String line) -> {
-            if (!line.startsWith("peptide")) {
-                consumer.accept(line.split(",", 2));
+                            Consumer<UnipeptLCA> consumer) throws IOException {
+        /** LCA search **/
+        HttpPost lcaRequest = new HttpPost("https://unipept.ugent.be/mpa/pept2data");
+        lcaRequest.addHeader(HttpHeaders.ACCEPT, "application/json");
+        lcaRequest.addHeader(HttpHeaders.CONTENT_TYPE, "application/json");
+        Map<String, Object> lcaParams = new HashMap<>();
+        lcaParams.put("peptides", peptides);
+        lcaParams.put("equate_il", true);
+        lcaParams.put("missed", true);
+        lcaRequest.setEntity(new StringEntity(objectMapper.writeValueAsString(lcaParams), StandardCharsets.UTF_8));
+        // LCA response
+        CloseableHttpResponse lcaResponse = null;
+        int retryCount = 1;
+        do {
+            try {
+                lcaResponse = httpClient.execute(lcaRequest);
+            } catch (NoHttpResponseException ntre) {
+                try {
+                    Thread.sleep(3_000 * retryCount);
+                    log.warn("network error when execute LCA api, retry {} time", retryCount++);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+                continue;
             }
-        });
-//        Files.lines(tempFilePath)
-//                .skip(1)
-//                .forEach(line -> consumer.accept(line.split(",", 2)));
-//        Files.delete(tempFilePath);
+            if(lcaResponse.getStatusLine().getStatusCode() != 200){
+                try {
+                    Thread.sleep(3_000 * retryCount);
+                    log.warn("network error when execute LCA api, retry {} time", retryCount++);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            }else {
+                break;
+            }
+        } while (true);
+        List<UnipeptLCA> unipeptLCAList = new ArrayList<>();
+        Set<Integer> unsearchTidSet = new HashSet<>();
+        String lcaInfos = EntityUtils.toString(lcaResponse.getEntity());
+        Iterator<JsonNode> peptItr = objectMapper.readTree(lcaInfos).get("peptides").elements();
+        while (peptItr.hasNext()) {
+            JsonNode peptNode = peptItr.next();
+            UnipeptLCA unipeptLCA = new UnipeptLCA();
+            unipeptLCA.setSequence(peptNode.get("sequence").asText());
+            unipeptLCA.setLcaId(peptNode.get("lca").asInt());
+            List<Integer> lineageIds = new ArrayList<>();
+            Iterator<JsonNode> idsItr = peptNode.get("lineage").elements();
+            while (idsItr.hasNext()) {
+                Number tid = idsItr.next().numberValue();
+                lineageIds.add(tid == null ? null : tid.intValue());
+            }
+            unipeptLCA.setLineageIds(lineageIds);
+            unipeptLCAList.add(unipeptLCA);
+            // add unsearch tid
+            if (!tid2Taxon.containsKey(unipeptLCA.getLcaId())) {
+                unsearchTidSet.add(unipeptLCA.getLcaId());
+            }
+            unipeptLCA.getLineageIds().stream()
+                    .filter(tid -> tid != null && !tid2Taxon.containsKey(tid))
+                    .forEach(tid -> unsearchTidSet.add(tid));
+        }
+        /** taxon search **/
+        if (unsearchTidSet.size() > 0) {
+            HttpPost taxaRequest = new HttpPost("https://unipept.ugent.be/private_api/taxa");
+            taxaRequest.addHeader(HttpHeaders.ACCEPT, "application/json");
+            taxaRequest.addHeader(HttpHeaders.CONTENT_TYPE, "application/json");
+            Map<String, Object> taxaParams = new HashMap<>();
+            taxaParams.put("taxids", unsearchTidSet);
+            taxaRequest.setEntity(new StringEntity(objectMapper.writeValueAsString(taxaParams), StandardCharsets.UTF_8));
+            CloseableHttpResponse taxaResponse = null;
+            retryCount = 1;
+            do {
+                try {
+                    taxaResponse = httpClient.execute(taxaRequest);
+                } catch (NoHttpResponseException nre) {
+                    try {
+                        Thread.sleep(3_000 * retryCount);
+                        log.warn("network error when execute taxa api, retry {} time", retryCount++);
+                    } catch (InterruptedException ie) {
+                        throw new RuntimeException(ie);
+                    }
+                    continue;
+                }
+                if(taxaResponse.getStatusLine().getStatusCode() != 200){
+                    try {
+                        Thread.sleep(3_000 * retryCount);
+                        log.warn("network error when execute taxa api, retry {} time", retryCount++);
+                    } catch (InterruptedException ie) {
+                        throw new RuntimeException(ie);
+                    }
+                }else {
+                    break;
+                }
+            } while (true);
+            String taxonInfo = EntityUtils.toString(taxaResponse.getEntity());
+            List<UnipeptTaxon> taxonList = objectMapper.readValue(taxonInfo, new TypeReference<List<UnipeptTaxon>>() {
+            });
+            taxonList.stream()
+                    .forEach(taxon -> tid2Taxon.put(taxon.getId(), taxon));
+        }
+        unipeptLCAList.stream()
+                .forEach(unipeptLCA -> {
+                    // set tname
+                    UnipeptTaxon taxon = tid2Taxon.get(unipeptLCA.getLcaId());
+                    unipeptLCA.setLcaName(taxon.getName());
+                    unipeptLCA.setLcaRank(taxon.getRank());
+                    List<Integer> lineageIds = unipeptLCA.getLineageIds();
+                    List<String> lineageNames = new ArrayList<>(lineageIds.size());
+                    unipeptLCA.setLineageNames(lineageNames);
+                    for (int i = 0; i < lineageIds.size(); i++) {
+                        lineageNames.add(null);
+                        if (lineageIds.get(i) != null) {
+                            lineageNames.set(i, tid2Taxon.get(lineageIds.get(i)).getName());
+                        }
+                    }
+                    // consume
+                    consumer.accept(unipeptLCA);
+                });
+
+
+//        // construct request
+//        HttpPost httpPost = new HttpPost("http://api.unipept.ugent.be/api/v1/pept2lca");
+//        httpPost.addHeader(HttpHeaders.ACCEPT, "application/json");
+//        List<NameValuePair> params = new ArrayList<>(peptides.size() + 2);
+//        params.add(new BasicNameValuePair("extra", "true"));
+//        params.add(new BasicNameValuePair("names", "true"));
+//        params.add(new BasicNameValuePair("names", "true"));
+//        params.add(new BasicNameValuePair("equate_il", String.valueOf(equalIL)));
+//        params.addAll(peptides.stream()
+//                .map(peptide -> new BasicNameValuePair("input[]", peptide))
+//                .collect(Collectors.toList())
+//        );
+//        httpPost.setEntity(new UrlEncodedFormEntity(params));
+//        // parse response
+//        try (CloseableHttpResponse response = httpClient.execute(httpPost)) {
+//            // Get HttpResponse Status
+//            System.out.println(response.getStatusLine().toString());
+//            HttpEntity entity = response.getEntity();
+//            if (entity != null) {
+//                // return it as a String
+//                List<Map<String, String>> result = objectMapper.readValue(EntityUtils.toString(entity),
+//                        new TypeReference<List<Map<String, String>>>() {
+//                        });
+//                result.stream()
+//                        .forEach(consumer);
+//            }
+//        }
+
+////        Path tempFilePath = Files.createTempFile("unipept", ".tsv");
+//        String command = String.join(" ",
+//                "unipept pept2lca",
+////                "--output", tempFilePath.toString(),
+//                equalIL ? "--equate" : "",
+//                "--all",
+//                peptides.stream().collect(Collectors.joining(" "))
+//        );
+//        commandExecutor.exec(command, (String line) -> {
+//            if (!line.startsWith("peptide")) {
+//                consumer.accept(line.split(",", 2));
+//            }
+//        });
+////        Files.lines(tempFilePath)
+////                .skip(1)
+////                .forEach(line -> consumer.accept(line.split(",", 2)));
+////        Files.delete(tempFilePath);
     }
 
     public void calPeptideTaxonDistribution(String lcaFile) throws IOException {
@@ -274,9 +457,11 @@ public class TaxAnalysis {
         Files.delete(peptideTaxonDistChartPath);
     }
 
-    public void lca2Quant(String lcaFile, String peptide2QuantFile, boolean equateIL) {
+    public void lca2Quant(String lcaFile, boolean equateIL, String peptide2QuantFile) throws IOException {
+        BufferedReader br = Files.newBufferedReader(Paths.get(lcaFile));
+        // peptide file contains quant data?
 
-
+//        boolean containQuantData = tmp.length > 1;
     }
 
     @Data
