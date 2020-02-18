@@ -62,9 +62,9 @@ public class MPQPipelineTest {
 
     @Test
     public void tsv2lca() throws IOException, FileParsingException {
-        String peptide2PSMCountFile = "/home/huangjs/Documents/mpq/biomass-orgin-Run1_P/peptide2psmcount.tsv";
-        String lcaFile = "/home/huangjs/Documents/mpq/biomass-orgin-Run1_P/lca.tsv";
-        taxAnalysis.peptide2LCA(peptide2PSMCountFile, true, lcaFile);
+        String peptide2PSMCountFile = "/home/huangjs/Documents/mpq/biomass-orgin-Run1_P/peptide2psmcount_end_10000.tsv";
+        String lcaFile = "/home/huangjs/Documents/mpq/biomass-orgin-Run1_P/peptide2psmcount_end_10000_lca.tsv";
+        taxAnalysis.peptide2LCA(peptide2PSMCountFile, true, true, lcaFile);
     }
 
     @Test

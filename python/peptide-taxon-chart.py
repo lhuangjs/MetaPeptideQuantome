@@ -3,7 +3,7 @@ import json
 import sys
 
 peptideCount2TaxonCountJsonFile = sys.argv[1]
-peptideCount2TaxonCountChart = sys.argv[2]
+peptideCount2TaxonCountChartFile = sys.argv[2]
 
 ranks = ['forma', 'varietas', 'subspecies', 'species', 'species_subgroup', 'species_group', 'subgenus', 'genus',
          'subtribe',
@@ -47,5 +47,5 @@ for i in range(ranksLen):
     plt.title("Peptide distribution on " + ranks[i], fontweight='bold', fontsize='large', position=[0.5, 1.05])
     plt.subplots_adjust(left=0.15, right=0.9, top=0.9, bottom=0.1)
 
-plt.savefig(peptideCount2TaxonCountChart)
+plt.savefig(peptideCount2TaxonCountChartFile)
 # plt.show()

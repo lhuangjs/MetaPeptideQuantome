@@ -1,0 +1,16 @@
+phoenixcenter/metaproteomics/GlobalConfig.class
+phoenixcenter/metaproteomics/TaxAnalysis.class
+phoenixcenter/metaproteomics/entity/QuantPeptide.class
+phoenixcenter/metaproteomics/entity/QuantPeptide$QuantPeptideBuilder.class
+phoenixcenter/metaproteomics/Cons.class
+phoenixcenter/metaproteomics/CommandExecutor.class
+phoenixcenter/metaproteomics/Mascot2XMLEnhancer.class
+phoenixcenter/metaproteomics/entity/UnipeptLCA.class
+phoenixcenter/metaproteomics/cli/MPQCommand.class
+phoenixcenter/metaproteomics/entity/UnipeptTaxon.class
+phoenixcenter/metaproteomics/MPQPipeline.class
+phoenixcenter/metaproteomics/TaxAnalysis$1.class
+phoenixcenter/metaproteomics/entity/UnipeptTaxon$UnipeptTaxonBuilder.class
+phoenixcenter/metaproteomics/PeptideProphetEnhancer.class
+phoenixcenter/metaproteomics/TaxAnalysis$1TaxonQuant.class
+phoenixcenter/metaproteomics/TaxAnalysis$PeptideCount.class

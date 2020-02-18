@@ -1,0 +1,6 @@
+version: "3.5"
+services:
+  MPQ:
+    build: ./
+    image: MPQ:1.0
+    container_name: MPQ

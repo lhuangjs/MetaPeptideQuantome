@@ -1,15 +1,12 @@
 package phoenixcenter.metaproteomics;
 
-import com.fasterxml.jackson.annotation.JsonProperty;
 import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 import lombok.extern.log4j.Log4j2;
-import org.apache.http.HttpEntity;
 import org.apache.http.HttpHeaders;
 import org.apache.http.NoHttpResponseException;
 import org.apache.http.client.methods.CloseableHttpResponse;
@@ -18,7 +15,7 @@ import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.util.EntityUtils;
-import org.openqa.selenium.json.Json;
+import phoenixcenter.metaproteomics.entity.QuantPeptide;
 import phoenixcenter.metaproteomics.entity.UnipeptLCA;
 import phoenixcenter.metaproteomics.entity.UnipeptTaxon;
 
@@ -42,10 +39,24 @@ public class TaxAnalysis {
     private CommandExecutor commandExecutor = new CommandExecutor(Executors.newFixedThreadPool(6));
 
     private final String python3 = GlobalConfig.getValue("python3");
+
     private final String peptideRankDistScript = GlobalConfig.getValue("peptide-rank-dist.script");
+
     private final String peptideTaxonDistScript = GlobalConfig.getValue("peptide-taxon-dist.script");
 
+    private final String taxonQuantScript = GlobalConfig.getValue("taxon-quant.script");
+
+    private final int pept2dataSleepSecond = GlobalConfig.getIntValue("unipept.pept2data.sleep.second");
+
+    private final int pept2dataRetrySecond = GlobalConfig.getIntValue("unipept.pept2data.retry.second");
+
+    private final CloseableHttpClient httpClient = HttpClients.createDefault();
+
+    private final Map<Integer, UnipeptTaxon> tid2Taxon = new ConcurrentHashMap<>(3000);
+
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    private final double log2Val = Math.log(2);
 
     private final int batchSize = GlobalConfig.getIntValue("unipept.batch.size");
 
@@ -66,6 +77,7 @@ public class TaxAnalysis {
 
     public void peptide2LCA(String peptideFile,
                             boolean equalIL,
+                            boolean missedCleavage,
                             String lcaFile) throws IOException {
         BufferedReader br = Files.newBufferedReader(Paths.get(peptideFile));
         BufferedWriter bw = Files.newBufferedWriter(Paths.get(lcaFile));
@@ -81,42 +93,34 @@ public class TaxAnalysis {
         // read peptide file
         String line;
         long count = 0L;
-        int sleepBatch = batchSize * 5;
         List<String[]> peptideInfoList = new ArrayList<>(batchSize);
         while ((line = br.readLine()) != null) {
             count += 1L;
             peptideInfoList.add(line.split("\t", 2));
             if (peptideInfoList.size() == batchSize) {
-                processShard(peptideInfoList, containQuantData, equalIL, bw);
+                processShard(peptideInfoList, equalIL, missedCleavage, bw);
                 bw.flush();
                 peptideInfoList.clear();
-                if (count % sleepBatch == 0) {
-                    try {
-                        Thread.sleep(10_000);
-                    } catch (InterruptedException e) {
-                        e.printStackTrace();
-                    }
+                try {
+                    Thread.sleep(pept2dataSleepSecond * 1_000);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
                 }
                 log.info("{} peptides have been processed", count);
             }
         }
         if (peptideInfoList.size() > 0) {
-            processShard(peptideInfoList, containQuantData, equalIL, bw);
+            processShard(peptideInfoList, equalIL, missedCleavage, bw);
         }
         bw.close();
         br.close();
         log.info("total {} peptides have been processed", count);
-        Path parentDirPath = Paths.get(lcaFile).getParent();
-        String rank2PeptideCountJsonFile = Files.createTempFile("rank2PeptideCount", ".json").toString();
-        String peptideCount2TaxonCountJsonFile = Files.createTempFile("peptideCount2TaxonCount", ".json").toString();
         calPeptideTaxonDistribution(lcaFile);
-        log.debug("rank2PeptideCountJsonFile: {}, peptideCount2TaxonCountJsonFile: {} ",
-                rank2PeptideCountJsonFile, peptideCount2TaxonCountJsonFile);
     }
 
     private void processShard(List<String[]> peptideInfoList,
-                              boolean containQuantData,
                               boolean equalIL,
+                              boolean missedCleavage,
                               BufferedWriter bw) throws IOException {
         Map<String, List<String>> peptide2Info = peptideInfoList.stream()
                 .collect(Collectors.groupingBy(peptInfo -> peptInfo[0],
@@ -124,8 +128,7 @@ public class TaxAnalysis {
                                 Collectors.toList())
                 ));
         Map<String, String> peptide2LCA = new HashMap<>();
-//        peptide2LCA(peptide2Info.keySet(), equalIL, lcaInfo -> peptide2LCA.put(lcaInfo[0], lcaInfo[1]));
-        peptide2LCA(peptide2Info.keySet(), equalIL, unipeptLCA -> {
+        peptide2LCA(peptide2Info.keySet(), equalIL, missedCleavage, unipeptLCA -> {
             List<String> lineageNames = unipeptLCA.getLineageNames();
             List<Integer> lineageIds = unipeptLCA.getLineageIds();
             peptide2LCA.put(unipeptLCA.getSequence(),
@@ -133,7 +136,7 @@ public class TaxAnalysis {
                             unipeptLCA.getLcaName(), unipeptLCA.getLcaRank())
                             + "\t"
                             + IntStream.range(0, ranks.length)
-                            .mapToObj(i -> lineageIds.get(i) + "\t" + lineageNames.get(i))
+                            .mapToObj(i -> lineageIds.get(i) == null ? "\t" : lineageIds.get(i) + "\t" + lineageNames.get(i))
                             .collect(Collectors.joining("\t"))
             );
         });
@@ -148,55 +151,21 @@ public class TaxAnalysis {
                 }
             }
         }
-//        List<String> peptideList = peptideInfoList.stream()
-//                .map(entry -> entry[0])
-//                .collect(Collectors.toList());
-//        List<String[]> lcaInfoList = new ArrayList<>(peptideList.size());
-//        peptide2LCA(peptideList, equalIL, lcaInfo -> lcaInfoList.add(lcaInfo));
-//        Iterator<String[]> peptideInfoItr = peptideInfoList.iterator();
-//        Iterator<String[]> lcaInfoItr = lcaInfoList.iterator();
-//        while (lcaInfoItr.hasNext()) {
-//            String[] lcaInfo = lcaInfoItr.next();
-//            while (peptideInfoItr.hasNext()) {
-//                StringJoiner joiner = new StringJoiner("\t");
-//                String[] peptideInfo = peptideInfoItr.next();
-//                joiner.add(peptideInfo[0]);
-//                if (containQuantData) {
-//                    joiner.add(peptideInfo[1]);
-//                }
-//                if (lcaInfo[0].equals(peptideInfo[0])) {
-//                    joiner.add(lcaInfo[1].replace(",", "\t"));
-//                    bw.write(joiner.toString() + System.lineSeparator());
-//                    break;
-//                }
-//            }
-//        }
-//        while (peptideInfoItr.hasNext()) {
-//            if (containQuantData) {
-//                bw.write(String.join("\t", peptideInfoItr.next()) + System.lineSeparator());
-//            } else {
-//                bw.write(peptideInfoItr.next() + System.lineSeparator());
-//            }
-//        }
     }
-
-    private final CloseableHttpClient httpClient = HttpClients.createDefault();
-    private final Map<Integer, UnipeptTaxon> tid2Taxon = new ConcurrentHashMap<>(3000);
-
-    private final Random random = new Random();
-
 
     public void peptide2LCA(Collection<String> peptides,
                             boolean equalIL,
+                            boolean missedCleavage,
                             Consumer<UnipeptLCA> consumer) throws IOException {
+
         /** LCA search **/
         HttpPost lcaRequest = new HttpPost("https://unipept.ugent.be/mpa/pept2data");
         lcaRequest.addHeader(HttpHeaders.ACCEPT, "application/json");
         lcaRequest.addHeader(HttpHeaders.CONTENT_TYPE, "application/json");
         Map<String, Object> lcaParams = new HashMap<>();
         lcaParams.put("peptides", peptides);
-        lcaParams.put("equate_il", true);
-        lcaParams.put("missed", true);
+        lcaParams.put("equate_il", equalIL);
+        lcaParams.put("missed", missedCleavage);
         lcaRequest.setEntity(new StringEntity(objectMapper.writeValueAsString(lcaParams), StandardCharsets.UTF_8));
         // LCA response
         CloseableHttpResponse lcaResponse = null;
@@ -206,21 +175,21 @@ public class TaxAnalysis {
                 lcaResponse = httpClient.execute(lcaRequest);
             } catch (NoHttpResponseException ntre) {
                 try {
-                    Thread.sleep(3_000 * retryCount);
+                    Thread.sleep(pept2dataRetrySecond * retryCount);
                     log.warn("network error when execute LCA api, retry {} time", retryCount++);
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                 }
                 continue;
             }
-            if(lcaResponse.getStatusLine().getStatusCode() != 200){
+            if (lcaResponse.getStatusLine().getStatusCode() != 200) {
                 try {
-                    Thread.sleep(3_000 * retryCount);
+                    Thread.sleep(pept2dataRetrySecond * retryCount);
                     log.warn("network error when execute LCA api, retry {} time", retryCount++);
                 } catch (InterruptedException e) {
                     e.printStackTrace();
                 }
-            }else {
+            } else {
                 break;
             }
         } while (true);
@@ -264,21 +233,21 @@ public class TaxAnalysis {
                     taxaResponse = httpClient.execute(taxaRequest);
                 } catch (NoHttpResponseException nre) {
                     try {
-                        Thread.sleep(3_000 * retryCount);
+                        Thread.sleep(pept2dataRetrySecond * retryCount);
                         log.warn("network error when execute taxa api, retry {} time", retryCount++);
                     } catch (InterruptedException ie) {
                         throw new RuntimeException(ie);
                     }
                     continue;
                 }
-                if(taxaResponse.getStatusLine().getStatusCode() != 200){
+                if (taxaResponse.getStatusLine().getStatusCode() != 200) {
                     try {
-                        Thread.sleep(3_000 * retryCount);
+                        Thread.sleep(pept2dataRetrySecond * retryCount);
                         log.warn("network error when execute taxa api, retry {} time", retryCount++);
                     } catch (InterruptedException ie) {
                         throw new RuntimeException(ie);
                     }
-                }else {
+                } else {
                     break;
                 }
             } while (true);
@@ -306,53 +275,6 @@ public class TaxAnalysis {
                     // consume
                     consumer.accept(unipeptLCA);
                 });
-
-
-//        // construct request
-//        HttpPost httpPost = new HttpPost("http://api.unipept.ugent.be/api/v1/pept2lca");
-//        httpPost.addHeader(HttpHeaders.ACCEPT, "application/json");
-//        List<NameValuePair> params = new ArrayList<>(peptides.size() + 2);
-//        params.add(new BasicNameValuePair("extra", "true"));
-//        params.add(new BasicNameValuePair("names", "true"));
-//        params.add(new BasicNameValuePair("names", "true"));
-//        params.add(new BasicNameValuePair("equate_il", String.valueOf(equalIL)));
-//        params.addAll(peptides.stream()
-//                .map(peptide -> new BasicNameValuePair("input[]", peptide))
-//                .collect(Collectors.toList())
-//        );
-//        httpPost.setEntity(new UrlEncodedFormEntity(params));
-//        // parse response
-//        try (CloseableHttpResponse response = httpClient.execute(httpPost)) {
-//            // Get HttpResponse Status
-//            System.out.println(response.getStatusLine().toString());
-//            HttpEntity entity = response.getEntity();
-//            if (entity != null) {
-//                // return it as a String
-//                List<Map<String, String>> result = objectMapper.readValue(EntityUtils.toString(entity),
-//                        new TypeReference<List<Map<String, String>>>() {
-//                        });
-//                result.stream()
-//                        .forEach(consumer);
-//            }
-//        }
-
-////        Path tempFilePath = Files.createTempFile("unipept", ".tsv");
-//        String command = String.join(" ",
-//                "unipept pept2lca",
-////                "--output", tempFilePath.toString(),
-//                equalIL ? "--equate" : "",
-//                "--all",
-//                peptides.stream().collect(Collectors.joining(" "))
-//        );
-//        commandExecutor.exec(command, (String line) -> {
-//            if (!line.startsWith("peptide")) {
-//                consumer.accept(line.split(",", 2));
-//            }
-//        });
-////        Files.lines(tempFilePath)
-////                .skip(1)
-////                .forEach(line -> consumer.accept(line.split(",", 2)));
-////        Files.delete(tempFilePath);
     }
 
     public void calPeptideTaxonDistribution(String lcaFile) throws IOException {
@@ -364,11 +286,11 @@ public class TaxAnalysis {
                         r -> r,
                         r -> -1
                 ));
-        int tidIdx = -1;
-        int trankIdx = -1;
+        int lcaIdIdx = -1;
+        int lcaRankIdx = -1;
         for (int i = 0; i < tmp.length; i++) {
             if (tmp[i].equals("taxon_id")) {
-                tidIdx = i;
+                lcaIdIdx = i;
             }
             if (tmp[i].endsWith("_name")) {
                 String rank = tmp[i].substring(0, tmp[i].length() - 5);
@@ -376,9 +298,9 @@ public class TaxAnalysis {
                     rank2Index.put(rank, i);
                 }
             } else if (tmp[i].equals("taxon_id")) {
-                tidIdx = i;
+                lcaIdIdx = i;
             } else if (tmp[i].equals("taxon_rank")) {
-                trankIdx = i;
+                lcaRankIdx = i;
             }
         }
         // calculate distribution
@@ -386,7 +308,11 @@ public class TaxAnalysis {
         List<String[]> lineageList = new ArrayList<>();
         while ((line = br.readLine()) != null) {
             tmp = line.split("\t", rank2Index.get(ranks[0]) + 1);
-            if (tidIdx < tmp.length) {
+            if (lcaIdIdx < tmp.length) {
+                // skip when lca is root
+                if (tmp[lcaIdIdx].equals("1")) {
+                    continue;
+                }
                 String[] lineage = new String[ranks.length];
                 lineageList.add(lineage);
                 for (int i = 0; i < ranks.length; i++) {
@@ -397,10 +323,10 @@ public class TaxAnalysis {
                     } else {
                         // 如果当前rank是低于LCA的rank，那么说明说明当前rank不存在taxon，否则，当前rank暂时没有分配名字。
                         // 等级越高数字越大
-                        if (rank2SortIdx.get(ranks[i]) < rank2SortIdx.get(tmp[trankIdx])) {
+                        if (rank2SortIdx.get(ranks[i]) < rank2SortIdx.get(tmp[lcaRankIdx].replace(" ", "_"))) {
                             lineage[i] = null;
                         } else {
-                            lineage[i] = ranks[i] + "_" + tmp[tidIdx];
+                            lineage[i] = ranks[i] + "_" + tmp[lcaIdIdx];
                         }
                     }
                 }
@@ -453,15 +379,151 @@ public class TaxAnalysis {
                 peptideTaxonDistChartPath.toString()
         );
         commandExecutor.exec(peptideTaxonDistChartCmd);
-        Files.delete(peptideRankDistChartPath);
-        Files.delete(peptideTaxonDistChartPath);
+        Files.delete(rank2PeptideCountJsonPath);
+        Files.delete(peptideCount2TaxonCountJsonPath);
     }
 
-    public void lca2Quant(String lcaFile, boolean equateIL, String peptide2QuantFile) throws IOException {
+    public void lca2Quant(String lcaFile,
+                          String rank,
+                          int minPeptideForTaxon,
+                          boolean log2,
+                          String taxonQuantFile) throws IOException {
+        @Data
+        class TaxonQuantChartData {
+            String rank;
+            boolean log2;
+            List<String> samples;
+            Map<String, List<Double>> taxon2Quants;
+        }
+
+        class TaxonQuant {
+            UnipeptTaxon unipeptTaxon;
+            List<QuantPeptide> quantPeptideList;
+            List<Double> quantValList;
+
+            public TaxonQuant(UnipeptTaxon unipeptTaxon, List<QuantPeptide> quantPeptideList) {
+                this.unipeptTaxon = unipeptTaxon;
+                this.quantPeptideList = quantPeptideList;
+            }
+        }
+        /** filter **/
+        List<TaxonQuant> taxonQuantList = lca2Quant(lcaFile, rank)
+                .entrySet().stream()
+                .filter(e -> e.getValue().size() >= minPeptideForTaxon)
+                .map(e -> new TaxonQuant(e.getKey(), e.getValue()))
+                .collect(Collectors.toList());
+        /** write result file **/
+        String headers = Files.lines(Paths.get(lcaFile)).limit(1).findFirst().get();
+        int sampleStartIdx = headers.indexOf("\t") + 1;
+        int sampleEndIdx = headers.indexOf("taxon_id") - 1;
+        String samplesStr = headers.substring(sampleStartIdx, sampleEndIdx);
+        // for python plot
+        TaxonQuantChartData taxonQuantChartData = new TaxonQuantChartData();
+        taxonQuantChartData.rank = rank;
+        taxonQuantChartData.log2 = log2;
+        taxonQuantChartData.samples = Arrays.stream(samplesStr.split("\t")).collect(Collectors.toList());
+        int sampleSize = taxonQuantChartData.samples.size();
+        taxonQuantChartData.taxon2Quants = new HashMap<>();
+        // tsv result file
+        Path taxonQuantFilePath = Paths.get(taxonQuantFile);
+        BufferedWriter bw = Files.newBufferedWriter(taxonQuantFilePath);
+        bw.write(String.join(System.lineSeparator(),
+                "#Rank: " + rank,
+                "#Min peptide count for taxon : " + minPeptideForTaxon,
+                log2 ? "# Enable Log2 transform" : "# Disable Log2 transform")
+                + System.lineSeparator());
+        bw.write(String.join("\t", "Taxon Id", "Taxon name",
+                samplesStr, "Peptides") + System.lineSeparator());
+        List<Double> totalTaxonQuantVals = IntStream.range(0, sampleSize).mapToObj(i -> 0.0)
+                .collect(Collectors.toList());
+        for (TaxonQuant taxonQuant : taxonQuantList) {
+            List<Double> taxonQuantVals = IntStream.range(0, sampleSize).mapToObj(i -> 0.0)
+                    .collect(Collectors.toList());
+            for (QuantPeptide quantPeptide : taxonQuant.quantPeptideList) {
+                List<Double> peptQunatVals = quantPeptide.getQuantValList();
+                for (int j = 0; j < peptQunatVals.size(); j++) {
+                    taxonQuantVals.set(j, taxonQuantVals.get(j) + peptQunatVals.get(j));
+                    totalTaxonQuantVals.set(j, totalTaxonQuantVals.get(j) + peptQunatVals.get(j));
+                }
+            }
+            taxonQuantChartData.taxon2Quants.put(taxonQuant.unipeptTaxon.getName(), taxonQuantVals);
+            taxonQuant.quantValList = taxonQuantVals;
+        }
+
+        for (TaxonQuant taxonQuant : taxonQuantList) {
+            List<Double> quantValList = IntStream.range(0, taxonQuant.quantValList.size())
+                    .mapToObj(i -> log2
+                            ? Math.log(taxonQuant.quantValList.get(i) / totalTaxonQuantVals.get(i)) / log2Val
+                            : taxonQuant.quantValList.get(i) / totalTaxonQuantVals.get(i) * 100
+                    )
+                    .collect(Collectors.toList());
+            UnipeptTaxon taxon = taxonQuant.unipeptTaxon;
+            bw.write(String.join("\t", taxon.getId().toString(), taxon.getName(),
+                    quantValList.stream()
+                            .map(quant -> quant.toString())
+                            .collect(Collectors.joining("\t")),
+                    taxonQuant.quantPeptideList.stream()
+                            .map(pept -> pept.getSequence())
+                            .collect(Collectors.joining("\t"))
+            ) + System.lineSeparator());
+        }
+        bw.close();
+        // run python to plot
+        Path taxonQuantJsonFilePath = Files.createTempFile("taxon-quant", ".json");
+        objectMapper.writeValue(taxonQuantJsonFilePath.toFile(), taxonQuantChartData);
+        Path taxonQuantChartPath = taxonQuantFilePath.getParent().resolve("taxon-quant-" + rank + ".png");
+        String taxonQuantChartCmd = String.join(" ",
+                python3,
+                taxonQuantScript,
+                taxonQuantJsonFilePath.toString(),
+                taxonQuantChartPath.toString()
+        );
+        commandExecutor.exec(taxonQuantChartCmd);
+        Files.delete(taxonQuantJsonFilePath);
+    }
+
+    public Map<UnipeptTaxon, List<QuantPeptide>> lca2Quant(String lcaFile,
+                                                           String rank) throws IOException {
         BufferedReader br = Files.newBufferedReader(Paths.get(lcaFile));
         // peptide file contains quant data?
+        List<String> headerList = Arrays.stream(br.readLine().split("\t")).collect(Collectors.toList());
+        int sampleStartIdx = 1;
+        int sampleEndIdx = headerList.indexOf("taxon_id") - 1;
+        int rankIdIdx = headerList.indexOf(rank + "_id");
+        int rankNameIdx = headerList.indexOf(rank + "_name");
+        boolean containQuant = sampleEndIdx == sampleEndIdx;
 
-//        boolean containQuantData = tmp.length > 1;
+        /** stat quantitative **/
+        Map<UnipeptTaxon, List<QuantPeptide>> taxon2QuantPeptides = new HashMap<>();
+        String line;
+        while ((line = br.readLine()) != null) {
+            String[] tmp = Arrays.stream(line.split("\t", rankNameIdx + 2))
+                    .map(String::trim)
+                    .toArray(String[]::new);
+            String rankId;
+            if (tmp.length > rankIdIdx && (rankId = tmp[rankIdIdx]).length() > 0) {
+                UnipeptTaxon taxon = UnipeptTaxon.builder()
+                        .id(Integer.parseInt(rankId))
+                        .name(tmp[rankNameIdx])
+                        .build();
+                List<QuantPeptide> quantPeptideList = taxon2QuantPeptides.get(taxon);
+                if (quantPeptideList == null) {
+                    quantPeptideList = new ArrayList<>();
+                    taxon2QuantPeptides.put(taxon, quantPeptideList);
+                }
+                quantPeptideList.add(
+                        QuantPeptide.builder()
+                                .sequence(tmp[0])
+                                .quantValList(containQuant ? IntStream.rangeClosed(sampleStartIdx, sampleEndIdx)
+                                        .mapToObj(i -> tmp[i].length() == 0 ? 0 : Double.valueOf(tmp[i]))
+                                        .collect(Collectors.toList())
+                                        : null)
+                                .build()
+                );
+            }
+        }
+        br.close();
+        return taxon2QuantPeptides;
     }
 
     @Data
