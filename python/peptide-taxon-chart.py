@@ -29,7 +29,7 @@ def sortFun(key):
     return int(key)
 
 
-plt.figure(figsize=(25, 80))
+plt.figure(figsize=(32, 80))
 for i in range(ranksLen):
     plt.subplot(rows, cols, i + 1)
     peptideCount2TaxonCount = data[ranks[i]]

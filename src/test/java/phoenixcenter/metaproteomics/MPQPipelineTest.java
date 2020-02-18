@@ -27,7 +27,7 @@ public class MPQPipelineTest {
         String targetDecoyLibrary = "/home/huangjs/Documents/mpq/biomass-orgin-Run1_P/biomass-td.fasta";
         String pepxmlFile = "/home/huangjs/Documents/mpq/biomass-orgin-Run1_P/F008284.pep.xml";
 //        mascot2XMLEnhancer.genLibraryWithDecoy(targetLibrary, decoyPrefix, targetDecoyLibrary);
-        mascot2XMLEnhancer.convertAutoDecoyMode(datFile, decoyPrefix, targetDecoyLibrary, pepxmlFile);
+        mascot2XMLEnhancer.convertAutoDecoyMode(datFile, decoyPrefix, "trypsin", targetDecoyLibrary, pepxmlFile);
     }
 
     @Test
@@ -43,7 +43,7 @@ public class MPQPipelineTest {
         for (int i = 0; i < datIds.length; i++) {
             String pepxmlFile = "/home/huangjs/Documents/mpq/biomass-orgin-Run1_P/" + datIds[i] + ".pep.xml";
             mascot2XMLEnhancer.convertAutoDecoyMode("/home/huangjs/Documents/mpq/biomass-orgin-Run1_P/" + datIds[i] + ".dat",
-                    decoyPrefix, targetDecoyLibrary, pepxmlFile);
+                    decoyPrefix, "trypsin", targetDecoyLibrary, pepxmlFile);
 //            peptideProphetEnhancer.runPeptideProphet( "/home/huangjs/Documents/mpq/biomass-orgin-Run1_P/" + datIds[i] + ".pp.pep.xml",
 //            ppParams, pepxmlFile);
         }

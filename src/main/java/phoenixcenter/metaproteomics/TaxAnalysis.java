@@ -28,15 +28,12 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 @Log4j2
 public class TaxAnalysis {
-
-    private CommandExecutor commandExecutor = new CommandExecutor(Executors.newFixedThreadPool(6));
 
     private final String python3 = GlobalConfig.getValue("python3");
 
@@ -371,16 +368,16 @@ public class TaxAnalysis {
                 rank2PeptideCountJsonPath.toString(),
                 peptideRankDistChartPath.toString()
         );
-        commandExecutor.exec(peptideRankDistChartCmd);
+        CommandExecutor.exec(peptideRankDistChartCmd);
         String peptideTaxonDistChartCmd = String.join(" ",
                 python3,
                 peptideTaxonDistScript,
                 peptideCount2TaxonCountJsonPath.toString(),
                 peptideTaxonDistChartPath.toString()
         );
-        commandExecutor.exec(peptideTaxonDistChartCmd);
-        Files.delete(rank2PeptideCountJsonPath);
-        Files.delete(peptideCount2TaxonCountJsonPath);
+        CommandExecutor.exec(peptideTaxonDistChartCmd);
+//        Files.delete(rank2PeptideCountJsonPath);
+//        Files.delete(peptideCount2TaxonCountJsonPath);
     }
 
     public void lca2Quant(String lcaFile,
@@ -478,11 +475,11 @@ public class TaxAnalysis {
                 taxonQuantJsonFilePath.toString(),
                 taxonQuantChartPath.toString()
         );
-        commandExecutor.exec(taxonQuantChartCmd);
+        CommandExecutor.exec(taxonQuantChartCmd);
         Files.delete(taxonQuantJsonFilePath);
     }
 
-    public Map<UnipeptTaxon, List<QuantPeptide>> lca2Quant(String lcaFile,
+    private Map<UnipeptTaxon, List<QuantPeptide>> lca2Quant(String lcaFile,
                                                            String rank) throws IOException {
         BufferedReader br = Files.newBufferedReader(Paths.get(lcaFile));
         // peptide file contains quant data?

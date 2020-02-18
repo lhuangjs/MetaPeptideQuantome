@@ -1,5 +1,6 @@
 phoenixcenter/metaproteomics/GlobalConfig.class
 phoenixcenter/metaproteomics/TaxAnalysis.class
+phoenixcenter/metaproteomics/TaxAnalysis$1TaxonQuantChartData.class
 phoenixcenter/metaproteomics/entity/QuantPeptide.class
 phoenixcenter/metaproteomics/entity/QuantPeptide$QuantPeptideBuilder.class
 phoenixcenter/metaproteomics/Cons.class

@@ -102,9 +102,9 @@ public class TaxAnalysisTest {
     public void lca2Quant() throws IOException {
         taxAnalysis.lca2Quant("/home/huangjs/Documents/mpq/biomass-orgin-Run1_P/LCA/final_lca.tsv",
                 "species",
-                4,
+                3,
                 false,
-                "/home/huangjs/Documents/mpq/biomass-orgin-Run1_P/LCA/taxon2quant_species-4.tsv");
+                "/home/huangjs/Documents/mpq/biomass-orgin-Run1_P/LCA/taxon2quant_species-3.tsv");
     }
 
 

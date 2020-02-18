@@ -9,20 +9,16 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.Executors;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
 public class Mascot2XMLEnhancer {
 
-
-    private CommandExecutor commandExecutor = new CommandExecutor(Executors.newFixedThreadPool(2));
-
     private final String mascot2XMLLocation = GlobalConfig.getValue("Mascot2XML");
 
     public void genLibraryWithDecoy(String targetLibrary,
-                                           String decoyPrefix,
-                                           String targetDecoyLibrary) throws IOException {
+                                    String decoyPrefix,
+                                    String targetDecoyLibrary) throws IOException {
         BufferedReader br = Files.newBufferedReader(Paths.get(targetLibrary), StandardCharsets.UTF_8);
         BufferedWriter bw = Files.newBufferedWriter(Paths.get(targetDecoyLibrary), StandardCharsets.UTF_8,
                 StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.CREATE);
@@ -58,6 +54,18 @@ public class Mascot2XMLEnhancer {
         bw.close();
     }
 
+    public void convertManualDecoyMode(String datFile,
+                                       String enzyme,
+                                       String targetDecoyLibrary,
+                                       String pepxmlFile) throws IOException {
+        /** convert **/
+        Map<String, String> params = new HashMap<>();
+        params.put("-D", targetDecoyLibrary);
+        params.put("-E", enzyme);
+        Path resultPath = convert(Paths.get(datFile), params);
+        Files.move(resultPath, Paths.get(pepxmlFile), StandardCopyOption.REPLACE_EXISTING);
+    }
+
     /**
      * Generate pepxml file from dat file(auto decoy mode).
      * <p>
@@ -72,12 +80,13 @@ public class Mascot2XMLEnhancer {
      */
     public void convertAutoDecoyMode(String datFile,
                                      String decoyPrefix,
+                                     String enzyme,
                                      String targetDecoyLibrary,
                                      String pepxmlFile) throws IOException {
         /** convert **/
         Map<String, String> params = new HashMap<>();
         params.put("-D", targetDecoyLibrary);
-        params.put("-E", "trypsin");
+        params.put("-E", enzyme);
         Path resultPath = parseAutoDecoyModelDat(Paths.get(datFile), params, decoyPrefix);
         Files.move(resultPath, Paths.get(pepxmlFile), StandardCopyOption.REPLACE_EXISTING);
     }
@@ -319,7 +328,7 @@ public class Mascot2XMLEnhancer {
                 + params.entrySet().stream()
                 .map(e -> e.getKey() + (e.getValue() == null ? "" : e.getValue()))
                 .collect(Collectors.joining(" "));
-        commandExecutor.exec(command);
+        CommandExecutor.exec(command);
         String datFileName = datPath.getFileName().toString();
         datFileName = datFileName.substring(0, datFileName.lastIndexOf("."));
         return datPath.getParent().resolve(datFileName + ".pep.xml");

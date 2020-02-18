@@ -15,7 +15,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.*;
-import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 /**
@@ -30,8 +29,6 @@ public class PeptideProphetEnhancer {
 
     private final String qvalityLocation = GlobalConfig.getValue("qvality");
 
-    private CommandExecutor commandExecutor = new CommandExecutor(Executors.newFixedThreadPool(2));
-
     public void runPeptideProphet(String pepxmlFile,
                                   Map<String, String> params,
                                   String ppPepxmlFile) throws IOException, FileParsingException {
@@ -42,7 +39,7 @@ public class PeptideProphetEnhancer {
                         .map(e -> e.getKey() + (e.getValue() == null ? "" : e.getValue()))
                         .collect(Collectors.joining(" ")),
                 pepxmlFile);
-        commandExecutor.exec(command);
+        CommandExecutor.exec(command);
         // delete unused files
         deleteUnusedFiles(Paths.get(ppPepxmlFile));
     }
@@ -67,7 +64,7 @@ public class PeptideProphetEnhancer {
         String command = String.join(" ", xinteractLocation,
                 "-N" + fppPepxmlPath,
                 "-nI -p" + probThreshold);
-        commandExecutor.exec(command);
+        CommandExecutor.exec(command);
         // delete unused files
         deleteUnusedFiles(fppPepxmlPath);
     }
@@ -122,7 +119,7 @@ public class PeptideProphetEnhancer {
                 "-d -Y",
                 "-o", qvalityRsPath.toString()
         );
-        commandExecutor.exec(command);
+        CommandExecutor.exec(command);
 
         /** get min probability when FDR < fdrThreshold **/
         BufferedReader br = Files.newBufferedReader(qvalityRsPath);
@@ -164,7 +161,6 @@ public class PeptideProphetEnhancer {
             probThresholds[i] = getProbThreshold(Paths.get(ppPepxmlFiles[i]), decoyPrefix, fdrThreshold);
         }
         pp2tsv(decoyPrefix, ppPepxmlFiles, probThresholds, peptide2PSMCountFile);
-
     }
 
     public void pp2tsv(String decoyPrefix, String[] ppPepxmlFiles,
