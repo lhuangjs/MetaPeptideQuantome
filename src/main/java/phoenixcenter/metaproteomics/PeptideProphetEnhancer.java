@@ -16,6 +16,7 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.*;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 /**
  * Function:
@@ -163,8 +164,15 @@ public class PeptideProphetEnhancer {
         pp2tsv(decoyPrefix, ppPepxmlFiles, probThresholds, peptide2PSMCountFile);
     }
 
-    public void pp2tsv(String decoyPrefix, String[] ppPepxmlFiles,
-                       double[] probThresholds, String peptide2PSMCountFile) throws FileParsingException, IOException {
+    public void pp2tsv(String decoyPrefix, String[] ppPepxmlFiles, String peptide2PSMCountFile) throws IOException, FileParsingException {
+        double[] probThresholds = IntStream.range(0, ppPepxmlFiles.length)
+                .mapToDouble(i -> 0.0)
+                .toArray();
+        pp2tsv(decoyPrefix, ppPepxmlFiles, probThresholds, peptide2PSMCountFile);
+    }
+
+    private void pp2tsv(String decoyPrefix, String[] ppPepxmlFiles,
+                        double[] probThresholds, String peptide2PSMCountFile) throws FileParsingException, IOException {
         Map<String, int[]> peptide2PSMCounts = new HashMap<>();
         for (int i = 0; i < ppPepxmlFiles.length; i++) {
             Map<String, Integer> peptide2PSMCount = statPSMCount(decoyPrefix, ppPepxmlFiles[i], probThresholds[i]);

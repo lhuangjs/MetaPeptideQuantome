@@ -55,7 +55,7 @@ public class MPQCommand implements Callable<Integer> {
     @Command(name = "xml2pp", description = "Run PeptideProphet")
     public void xml2pp(
             @Option(names = "-i", description = "Path of the input pepXML file", required = true) String pepxmlFile,
-            @Option(names = "-FDR", description = "The peptide-level FDR") double fdr,
+            @Option(names = "-FDR", description = "The peptide-level FDR") Double fdr,
             @Option(names = "-P", description = "The prefix of decoy protein sequence, required when filtering by FDR") String decoyPrefix,
             @Option(names = "-D", description = "The sequence database", required = true) String libraryFile,
             @Option(names = "-PPM ", defaultValue = "true",
@@ -67,7 +67,7 @@ public class MPQCommand implements Callable<Integer> {
         if (ppm) {
             params.put("-PPM", null);
         }
-        if (fdr < 1) {
+        if (fdr != null && fdr < 1) {
             Path tmpPath = Files.createTempFile("pp", ".pep.xml");
             peptideProphetEnhancer.runPeptideProphet(pepxmlFile, params, tmpPath.toString());
             peptideProphetEnhancer.filterByFDR(tmpPath, decoyPrefix, fdr, Paths.get(ppPepxmlFile));
@@ -80,12 +80,16 @@ public class MPQCommand implements Callable<Integer> {
     @Command(name = "xml2tsv", description = "Extract PSM count from pepXML files")
     public void xml2tsv(
             @Option(names = "-i", description = "Path of the input pepXML files, separated by commas", required = true) String pepxmlFiles,
-            @Option(names = "-FDR", description = "The peptide-level FDR") double fdr,
-            @Option(names = "-P", description = "The prefix of decoy protein sequence, required when filtering by FDR") String decoyPrefix,
+            @Option(names = "-FDR", description = "The peptide-level FDR") Double fdr,
+            @Option(names = "-P", description = "The prefix of decoy protein sequence") String decoyPrefix,
             @Option(names = "-o", description = "Path of the output tsv file", required = true) String tsvFile
     ) throws IOException, FileParsingException {
-        peptideProphetEnhancer.pp2tsv(decoyPrefix, pepxmlFiles.split(","),
-                fdr, tsvFile);
+        if (fdr == null) {
+            peptideProphetEnhancer.pp2tsv(decoyPrefix, pepxmlFiles.split(","), tsvFile);
+        } else {
+            peptideProphetEnhancer.pp2tsv(decoyPrefix, pepxmlFiles.split(","),
+                    fdr, tsvFile);
+        }
     }
 
     @Command(name = "pept2lca", description = "Retrieve LCA information from Unipept")
