@@ -109,7 +109,7 @@ public class TaxAnalysisTest {
 
 
     @Test
-    public void name() throws IOException {
+    public void compare() throws IOException {
         Map<String, Double> actualAbundance = new HashMap<String, Double>() {
             {
                 put("Agrobacterium tumefaciens", 4.259);
